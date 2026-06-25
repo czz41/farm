@@ -17,9 +17,14 @@ public class SysConfigUpdateRequest implements Serializable {
     private String plantName;
 
     /**
-     * 和风城市ID
+     * 和风城市ID（存数据库用）
      */
     private String locationCode;
+
+    /**
+     * 城市名称（前端展示用）
+     */
+    private String locationName;
 
     /**
      * 生长阶段备注：种子/幼苗期等

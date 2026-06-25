@@ -1,6 +1,9 @@
 package com.yupi.project.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.yupi.project.common.ErrorCode;
+import com.yupi.project.exception.BusinessException;
+import com.yupi.project.model.dto.warn.WarnSimulateRequest;
 import com.yupi.project.model.entity.IrrTempPlan;
 import com.yupi.project.model.entity.SysConfig;
 import com.yupi.project.model.entity.WarnHistory;
@@ -11,6 +14,7 @@ import com.yupi.project.service.IrrTempPlanService;
 import com.yupi.project.service.PlanPublishService;
 import com.yupi.project.service.QWeatherService;
 import com.yupi.project.service.SysConfigService;
+import com.yupi.project.service.SysOperationLogService;
 import com.yupi.project.service.WarnHistoryService;
 import com.yupi.project.service.WarnScheduleService;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +28,7 @@ import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.stream.Collectors;
 
 /**
@@ -64,6 +69,9 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
     @Resource
     private PlanPublishService planPublishService;
 
+    @Resource
+    private SysOperationLogService operationLogService;
+
     /**
      * 每 10 分钟检查一次极端天气
      */
@@ -95,11 +103,8 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
                 long cnt = warnHistoryService.count(new QueryWrapper<WarnHistory>()
                         .eq("warn_id", w.getWarnId()).eq("msg_type", MSG_ALERT));
                 if (cnt == 0) {
-                    WarnHistory wh = toWarnHistory(w, MSG_ALERT);
-                    warnHistoryService.save(wh);
+                    recordAlert(w, to);
                     newAlerts.add(w);
-                    sendMail(to, "【极端天气预警】" + nullToEmpty(w.getWarnType()),
-                            formatWarning("检测到新的极端天气预警", w));
                 }
             }
 
@@ -151,6 +156,104 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
         } catch (Exception e) {
             log.error("清理过期临时方案异常", e);
         }
+    }
+
+    @Override
+    public void simulateWarning(WarnSimulateRequest request) {
+        if (request == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        SysConfig config = sysConfigService.getById(1);
+        if (config == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "系统配置不存在，请先初始化");
+        }
+        // 构造模拟预警
+        QWeatherWarning w = new QWeatherWarning();
+        w.setWarnId("SIM-" + System.currentTimeMillis());
+        w.setWarnType(request.getWarnType());
+        w.setWarnLevel(request.getWarnLevel());
+        Date now = new Date();
+        w.setAlertStart(now);
+        int minutes = (request.getDurationMinutes() == null || request.getDurationMinutes() <= 0)
+                ? 60 : request.getDurationMinutes();
+        w.setAlertEnd(new Date(now.getTime() + minutes * 60000L));
+        // 拼接手动触发备注 + 开始/结束时间
+        SimpleDateFormat logSdf = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        logSdf.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
+        String manualDesc = "（手动触发）开始：" + logSdf.format(now)
+                + "，结束：" + logSdf.format(w.getAlertEnd());
+        w.setDescText(nullToEmpty(request.getDescText()) + manualDesc);
+
+        String to = config.getMailAddr();
+        // 记录预警 + 邮件
+        recordAlert(w, to);
+        // 记录操作日志
+        operationLogService.log("simulate_warn",
+                "手动触发模拟预警：" + request.getWarnType() + " · " + request.getWarnLevel()
+                        + " · 持续" + minutes + "分钟" + manualDesc);
+        // 自动介入：开启介入且当前非临时模式
+        boolean alreadyInTemp = config.getCurrentPlanType() != null
+                && config.getCurrentPlanType() == PLAN_TYPE_TEMP
+                && getActiveTempPlan() != null;
+        if (config.getEnableAutoIntervene() != null && config.getEnableAutoIntervene() == 1 && !alreadyInTemp) {
+            handleIntervene(config, w, to);
+        }
+        log.info("测试面板模拟预警完成 warnId={} type={}", w.getWarnId(), w.getWarnType());
+    }
+
+    @Override
+    public void simulateClear() {
+        SysConfig config = sysConfigService.getById(1);
+        if (config == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "系统配置不存在，请先初始化");
+        }
+        if (config.getCurrentPlanType() == null || config.getCurrentPlanType() != PLAN_TYPE_TEMP) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "当前非临时模式，无需恢复");
+        }
+        IrrTempPlan activeTemp = getActiveTempPlan();
+        if (activeTemp == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "无生效中的临时方案");
+        }
+        restoreFromTemp(activeTemp, config, config.getMailAddr(), "测试面板手动模拟天气恢复");
+        operationLogService.log("simulate_clear", "手动模拟天气恢复，临时方案ID：" + activeTemp.getId());
+        log.info("测试面板模拟天气恢复完成 tempId={}", activeTemp.getId());
+    }
+
+    @Override
+    public void manualCancel() {
+        SysConfig config = sysConfigService.getById(1);
+        if (config == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "系统配置不存在，请先初始化");
+        }
+        IrrTempPlan activeTemp = getActiveTempPlan();
+        if (activeTemp == null) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "无生效中的临时方案，无需解除");
+        }
+        // 1. 记录一条 cancel 消息到预警历史
+        WarnHistory cancel = new WarnHistory();
+        cancel.setWarnId("MANUAL-" + System.currentTimeMillis());
+        cancel.setWarnType(activeTemp.getWarnType());
+        cancel.setWarnLevel(activeTemp.getWarnLevel());
+        cancel.setAlertStart(activeTemp.getAlertStart());
+        cancel.setAlertEnd(activeTemp.getAlertEnd());
+        cancel.setDescText("手动解除预警");
+        cancel.setMsgType(MSG_CANCEL);
+        warnHistoryService.save(cancel);
+        // 2. 作废临时方案 + 恢复原方案 + 邮件通知
+        restoreFromTemp(activeTemp, config, config.getMailAddr(), "手动解除预警");
+        // 3. 记录操作日志
+        operationLogService.log("manual_cancel", "手动解除预警，作废临时方案ID：" + activeTemp.getId());
+        log.info("手动解除预警完成 tempId={}", activeTemp.getId());
+    }
+
+    /**
+     * 记录一条 alert 预警并发送邮件
+     */
+    private void recordAlert(QWeatherWarning w, String to) {
+        WarnHistory wh = toWarnHistory(w, MSG_ALERT);
+        warnHistoryService.save(wh);
+        sendMail(to, "【极端天气预警】" + nullToEmpty(w.getWarnType()),
+                formatWarning("检测到极端天气预警", w));
     }
 
     /**
@@ -211,8 +314,11 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
             } catch (Exception e) {
                 log.warn("恢复后重新下发原方案失败", e);
             }
+            SimpleDateFormat restoreSdf = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+            restoreSdf.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
             sendMail(to, "已恢复原浇水方案",
                     reason + "，已恢复到方案类型：" + planTypeName(sourceType)
+                            + "\n恢复时间：" + restoreSdf.format(new Date())
                             + "\n原临时方案ID：" + temp.getId());
             log.info("临时方案已作废并恢复原方案 tempId={} sourceType={}", temp.getId(), sourceType);
         } catch (Exception e) {
@@ -281,7 +387,9 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
 
     private String formatWarning(String prefix, QWeatherWarning w) {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        sdf.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
         StringBuilder sb = new StringBuilder(prefix).append("\n");
+        sb.append("通知时间：").append(sdf.format(new Date())).append("\n");
         sb.append("预警类型：").append(nullToEmpty(w.getWarnType())).append("\n");
         sb.append("预警等级：").append(nullToEmpty(w.getWarnLevel())).append("\n");
         sb.append("开始时间：").append(w.getAlertStart() == null ? "" : sdf.format(w.getAlertStart())).append("\n");

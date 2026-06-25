@@ -196,7 +196,7 @@ public class AiPlanServiceImpl implements AiPlanService {
         StringBuilder sb = new StringBuilder();
         sb.append("【基础信息】\n");
         sb.append("植物名称：").append(nullToEmpty(config.getPlantName())).append("\n");
-        sb.append("位置（和风城市ID）：").append(nullToEmpty(config.getLocationCode())).append("\n");
+        sb.append("位置：").append(nullToEmpty(config.getLocationCode())).append("\n");
         sb.append("场景：").append(config.getSceneType() != null && config.getSceneType() == 1 ? "室外" : "室内").append("\n");
         sb.append("生长阶段备注：").append(nullToEmpty(config.getSpecialNote())).append("\n");
         sb.append("【极端天气信息】\n");
@@ -215,7 +215,7 @@ public class AiPlanServiceImpl implements AiPlanService {
     private String buildPrompt(SysConfig config) {
         StringBuilder sb = new StringBuilder();
         sb.append("植物名称：").append(nullToEmpty(config.getPlantName())).append("\n");
-        sb.append("位置（和风城市ID）：").append(nullToEmpty(config.getLocationCode())).append("\n");
+        sb.append("位置：").append(nullToEmpty(config.getLocationCode())).append("\n");
         sb.append("场景：").append(config.getSceneType() != null && config.getSceneType() == 1 ? "室外" : "室内").append("\n");
         sb.append("生长阶段备注：").append(nullToEmpty(config.getSpecialNote())).append("\n");
         sb.append("请基于以上信息生成每日浇水方案。");

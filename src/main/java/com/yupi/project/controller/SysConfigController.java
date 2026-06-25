@@ -5,6 +5,7 @@ import com.yupi.project.common.ErrorCode;
 import com.yupi.project.common.ResultUtils;
 import com.yupi.project.exception.BusinessException;
 import com.yupi.project.model.dto.sysconfig.SysConfigUpdateRequest;
+import com.yupi.project.model.dto.sysconfig.SysConfigVO;
 import com.yupi.project.model.entity.SysConfig;
 import com.yupi.project.model.vo.CityLookupVO;
 import com.yupi.project.service.QWeatherService;
@@ -77,14 +78,19 @@ public class SysConfigController {
     }
 
     /**
-     * 获取系统配置
+     * 获取系统配置（locationCode 存城市ID，locationName 存城市名，前端只用 locationName 展示）
      *
      * @return
      */
     @GetMapping("/get")
-    public BaseResponse<SysConfig> getSysConfig() {
+    public BaseResponse<SysConfigVO> getSysConfig() {
         SysConfig sysConfig = sysConfigService.getById(FIXED_ID);
-        return ResultUtils.success(sysConfig);
+        if (sysConfig == null) {
+            return ResultUtils.success(null);
+        }
+        SysConfigVO vo = new SysConfigVO();
+        BeanUtils.copyProperties(sysConfig, vo);
+        return ResultUtils.success(vo);
     }
 
     /**
@@ -110,3 +116,4 @@ public class SysConfigController {
         return ResultUtils.success(result);
     }
 }
+

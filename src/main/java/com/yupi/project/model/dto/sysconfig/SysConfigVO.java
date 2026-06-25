@@ -1,27 +1,20 @@
-package com.yupi.project.model.entity;
+package com.yupi.project.model.dto.sysconfig;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableField;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
-import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
 import java.io.Serializable;
-import java.util.Date;
 
 /**
- * 系统全局配置
- *
- * @TableName sys_config
+ * 系统配置返回VO（用于 getSysConfig 接口）
+ * 相比 UpdateRequest 多带一个 locationName（城市名）供前端直接展示，
+ * 解决前端只拿到 locationCode 城市ID 时显示不友好的问题。
  */
-@TableName(value = "sys_config")
 @Data
-public class SysConfig implements Serializable {
+public class SysConfigVO implements Serializable {
+
     /**
-     * 固定1，仅一条系统配置
+     * 固定1
      */
-    @TableId(type = IdType.INPUT)
     private Integer id;
 
     /**
@@ -30,12 +23,12 @@ public class SysConfig implements Serializable {
     private String plantName;
 
     /**
-     * 和风城市ID（存数据库用）
+     * 和风城市ID（用于后端查询天气）
      */
     private String locationCode;
 
     /**
-     * 城市名称（前端展示用，与 locationCode 同时存取）
+     * 城市名（前端展示用）
      */
     private String locationName;
 
@@ -72,9 +65,7 @@ public class SysConfig implements Serializable {
     /**
      * 更新时间
      */
-    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
-    private Date updateTime;
+    private java.util.Date updateTime;
 
-    @TableField(exist = false)
     private static final long serialVersionUID = 1L;
 }

@@ -49,7 +49,8 @@ create table if not exists sys_config
 (
     id                     tinyint                               not null comment '固定1，仅一条系统配置' primary key,
     plant_name             varchar(64)                           not null comment '植物名称',
-    location_code          varchar(32)                           not null comment '和风城市ID',
+    location_code          varchar(32)                           not null comment '和风城市ID（存数据库用）',
+    location_name          varchar(64)                           null comment '城市名称（前端展示用）',
     special_note           varchar(200)                          null comment '生长阶段备注：种子/幼苗期等',
     mail_addr              varchar(128)                          null comment '预警接收邮箱',
     scene_type             tinyint                               not null comment '1室外 2室内',
@@ -122,3 +123,16 @@ create table if not exists warn_history
     index idx_warnid (warn_id),
     index idx_time (record_time)
 ) comment '历史预警记录表';
+
+-- ===== 升级语句（已有数据库执行）=====
+-- sys_config 增加 location_name 列（城市名称，前端展示用）
+ALTER TABLE sys_config ADD COLUMN location_name VARCHAR(64) NULL COMMENT '城市名称（前端展示用）' AFTER location_code;
+
+-- 操作日志表
+create table if not exists sys_operation_log
+(
+    id              bigint auto_increment comment '主键' primary key,
+    operation_type  varchar(32)                           not null comment '操作类型：simulate_warn/simulate_clear/publish/activate_temp',
+    content         varchar(500)                          not null comment '操作详情',
+    create_time     datetime    default CURRENT_TIMESTAMP not null comment '操作时间'
+) comment '操作日志表';

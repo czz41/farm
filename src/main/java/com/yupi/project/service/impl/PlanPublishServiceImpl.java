@@ -14,8 +14,9 @@ import com.yupi.project.service.IrrPlanItemService;
 import com.yupi.project.service.IrrTempPlanService;
 import com.yupi.project.service.PlanPublishService;
 import com.yupi.project.service.SysConfigService;
+import com.yupi.project.service.SysOperationLogService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -41,8 +42,8 @@ public class PlanPublishServiceImpl implements PlanPublishService {
      */
     private static final long FIXED_PARENT_ID = 1L;
 
-    @Value("${mqtt.topic:irr/device/001/cmd}")
-    private String topic;
+    @Resource
+    private MqttPublishUtil mqttPublishUtil;
 
     @Resource
     private SysConfigService sysConfigService;
@@ -55,6 +56,9 @@ public class PlanPublishServiceImpl implements PlanPublishService {
 
     @Resource
     private EmailService emailService;
+
+    @Resource
+    private SysOperationLogService operationLogService;
 
     @Override
     public boolean publishCurrentPlan() {
@@ -125,6 +129,8 @@ public class PlanPublishServiceImpl implements PlanPublishService {
                 "已人工确认切换到临时方案。\n预警类型：" + nullToEmpty(tempPlan.getWarnType())
                         + "\n预警等级：" + nullToEmpty(tempPlan.getWarnLevel())
                         + "\n方案ID：" + tempPlan.getId());
+        operationLogService.log("activate_temp", "手动确认切换临时方案ID：" + tempPlan.getId()
+                + "，预警类型：" + nullToEmpty(tempPlan.getWarnType()));
         return published;
     }
 
@@ -162,12 +168,13 @@ public class PlanPublishServiceImpl implements PlanPublishService {
 
         String msg = payload.toString();
         try {
-            MqttPublishUtil.sendMsg(topic, msg, 0, false);
+            mqttPublishUtil.sendMsg(msg, 0, false);
         } catch (Exception e) {
             log.error("MQTT下发失败", e);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "MQTT下发失败: " + e.getMessage());
         }
         log.info("方案下发成功 planType={} planName={} 时段数={}", planType, planName, items.size());
+        operationLogService.log("publish", "下发方案：" + planName + "，时段数：" + items.size());
         return true;
     }
 

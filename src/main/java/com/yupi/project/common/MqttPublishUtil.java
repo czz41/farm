@@ -1,73 +1,94 @@
 package com.yupi.project.common;
-import org.eclipse.paho.client.mqttv3.*;
-import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
+import lombok.extern.slf4j.Slf4j;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+/**
+ * MQTT 消息发布工具（Spring 组件，配置由 application.yml 注入）
+ *
+ * <pre>
+ * ==================== MQTT 主题规划 ====================
+ *
+ * 【发布主题】（服务器 → 设备）
+ *   farm/pi/cmd      下发浇水方案/指令
+ *      payload: {"planType":1,"planName":"人工方案","publishTime":...,"items":[...]}
+ *
+ * 【订阅主题】（设备 → 服务器）
+ *   farm/pi/status   设备心跳/在线状态上报
+ *      payload: {"online":true,"timestamp":1719300000000}  或纯文本 "heartbeat"
+ *   farm/pi/sensor   设备传感器数据上报
+ *      payload: {"soilMoisture":45,"temperature":28,"humidity":60}
+ *
+ * 【在线判定逻辑】
+ *   服务器订阅 status 主题，每次收到消息更新 DeviceStatusHolder.lastSeenTs。
+ *   DeviceStatusController 查询时，若 now - lastSeenTs > online-timeout 则判定离线。
+ *
+ * 【Broker】 tcp://8.134.210.144:1883
+ * ======================================================
+ * </pre>
+ */
+@Component
+@Slf4j
 public class MqttPublishUtil {
 
-    // MQTT 连接参数，根据你的服务修改
-    private static final String BROKER = "tcp://8.134.210.144:1883";
-    private static final String CLIENT_ID = "java_publish_client";
-    private static final String USER_NAME = "";
-    private static final String PASSWORD = "";
+    @Value("${mqtt.broker:tcp://8.134.210.144:1883}")
+    private String broker;
+
+    @Value("${mqtt.topic:farm/pi/cmd}")
+    private String defaultTopic;
 
     /**
-     * 发送MQTT消息
-     * @param topic 主题
+     * 发送 MQTT 消息
+     *
+     * @param topic   主题
      * @param payload 消息内容字符串
-     * @param qos 消息质量 0/1/2
+     * @param qos     消息质量 0/1/2
      * @param retained 是否保留消息
      */
-    public static void sendMsg(String topic, String payload, int qos, boolean retained) {
+    public void sendMsg(String topic, String payload, int qos, boolean retained) {
         MqttClient client = null;
         try {
-            // 内存持久化
             MemoryPersistence persistence = new MemoryPersistence();
-            client = new MqttClient(BROKER, CLIENT_ID + System.currentTimeMillis(), persistence);
+            String clientId = "java_publish_client_" + System.currentTimeMillis();
+            client = new MqttClient(broker, clientId, persistence);
 
-            // 连接配置
             MqttConnectOptions options = new MqttConnectOptions();
             options.setCleanSession(true);
-            if (USER_NAME != null && !USER_NAME.isEmpty()) {
-                options.setUserName(USER_NAME);
-                options.setPassword(PASSWORD.toCharArray());
-            }
-            // 连接超时
             options.setConnectionTimeout(10);
-            // 心跳
             options.setKeepAliveInterval(30);
 
-            // 建立连接
             client.connect(options);
 
-            // 封装消息
             MqttMessage message = new MqttMessage();
             message.setPayload(payload.getBytes());
             message.setQos(qos);
             message.setRetained(retained);
 
-            // 发布消息
             client.publish(topic, message);
-            System.out.println("发送成功，topic: " + topic + " ，内容： " + payload);
-
-        } catch (MqttException e) {
-            e.printStackTrace();
+            log.info("MQTT发送成功 topic={} payload={}", topic, payload);
+        } catch (Exception e) {
+            log.error("MQTT发送失败 topic={}", topic, e);
+            throw new RuntimeException("MQTT发送失败: " + e.getMessage(), e);
         } finally {
             if (client != null && client.isConnected()) {
                 try {
                     client.disconnect();
-                } catch (MqttException e) {
-                    e.printStackTrace();
+                } catch (Exception e) {
+                    log.warn("MQTT断开连接异常", e);
                 }
             }
         }
     }
 
-    // 测试入口
-    public static void main(String[] args) {
-        // 示例：给灌溉设备下发浇水指令
-        String topic = "irr/device/001/cmd";
-        String msg = "{\"waterTime\":10,\"open\":true}";
-        // qos0，不保留
-        sendMsg(topic, msg, 0, false);
+    /**
+     * 使用默认主题发送消息
+     */
+    public void sendMsg(String payload, int qos, boolean retained) {
+        sendMsg(defaultTopic, payload, qos, retained);
     }
 }

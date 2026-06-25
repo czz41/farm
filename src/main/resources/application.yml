@@ -1,6 +1,10 @@
 spring:
   application:
     name: springboot-init
+  # Jackson 全局日期格式化（避免 Date 序列化为时间戳数字）
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
   # DataSource Config
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -56,9 +60,17 @@ deepseek:
   model: deepseek-chat
   timeout: 60000 # 请求超时（毫秒）
 
-# MQTT 下发配置
+# MQTT 配置
+# 主题规划：
+#   发布(服务器→设备): farm/pi/cmd     — 下发浇水方案/指令
+#   订阅(设备→服务器): farm/pi/status  — 设备心跳/在线状态上报
+#   订阅(设备→服务器): farm/pi/sensor  — 传感器数据上报
 mqtt:
-  topic: irr/device/001/cmd
+  broker: tcp://8.134.210.144:1883
+  topic: farm/pi/cmd
+  status-topic: farm/pi/status
+  data-topic: farm/pi/sensor
+  online-timeout: 60000 # 设备在线判定超时（毫秒），超过该时长未收到心跳视为离线
 
 # 和风天气配置
 qweather:
