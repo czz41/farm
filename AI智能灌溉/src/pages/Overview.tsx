@@ -18,9 +18,9 @@ import DeviceStatusBadge from "@/components/DeviceStatusBadge";
 import Skeleton from "@/components/Skeleton";
 import { useStore } from "@/store";
 import { usePolling } from "@/hooks/usePolling";
-import { getManualPlan, getAiPlan, publishPlan, listPlanItems } from "@/api/plan";
+import { getManualPlan, getAiPlan, publishPlan, listPlanItems, listTempPlans } from "@/api/plan";
 import { listWarnHistory } from "@/api/warn";
-import { PLAN_TYPE, PLAN_TYPE_NAME, SCENE_NAME, type PlanItem, type WarnHistory } from "@/types";
+import { PLAN_TYPE, PLAN_TYPE_NAME, PLANT_TYPE_NAME, SCENE_NAME, type PlanItem, type WarnHistory } from "@/types";
 import { sortItemsByTime, timeAgo, warnLevelBg } from "@/utils/format";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +43,13 @@ export default function Overview() {
       } else if (planType === PLAN_TYPE.AI) {
         const plan = await getAiPlan();
         result = await listPlanItems(plan?.id ?? 1, 2);
+      } else if (planType === PLAN_TYPE.TEMP) {
+        // 临时方案：取生效中（status=1）的最新一条
+        const list = await listTempPlans();
+        const active = (list ?? []).find((p) => p.status === 1);
+        if (active?.id) {
+          result = await listPlanItems(active.id, 3);
+        }
       }
       setItems(result);
     } catch {
@@ -129,14 +136,19 @@ export default function Overview() {
                     <Leaf size={12} /> {config.plantName}
                   </span>
                 )}
-                {config?.locationCode && (
+                {config?.locationName && (
                   <span className="flex items-center gap-1">
-                    <MapPin size={12} /> {config.locationCode}
+                    <MapPin size={12} /> {config.locationName}
                   </span>
                 )}
                 {config?.sceneType && (
                   <span className="px-2 py-0.5 rounded-full bg-cream/5 border border-cream/10">
                     {SCENE_NAME[config.sceneType]}
+                  </span>
+                )}
+                {config?.plantType && (
+                  <span className="px-2 py-0.5 rounded-full bg-cream/5 border border-cream/10">
+                    {PLANT_TYPE_NAME[config.plantType]}
                   </span>
                 )}
               </div>
@@ -172,7 +184,7 @@ export default function Overview() {
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Droplets size={32} className="text-ash mb-3" />
               <p className="text-creamDim text-sm">暂无浇水时段</p>
-              <button onClick={() => navigate(planType === PLAN_TYPE.AI ? "/ai" : "/manual")} className="mt-3 text-blue-400 text-xs hover:underline">
+              <button onClick={() => navigate(planType === PLAN_TYPE.AI ? "/ai" : planType === PLAN_TYPE.TEMP ? "/temp" : "/manual")} className="mt-3 text-blue-400 text-xs hover:underline">
                 去配置方案 →
               </button>
             </div>

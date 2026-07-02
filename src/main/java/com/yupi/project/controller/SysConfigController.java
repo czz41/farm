@@ -8,8 +8,10 @@ import com.yupi.project.model.dto.sysconfig.SysConfigUpdateRequest;
 import com.yupi.project.model.dto.sysconfig.SysConfigVO;
 import com.yupi.project.model.entity.SysConfig;
 import com.yupi.project.model.vo.CityLookupVO;
+import com.yupi.project.service.PlanPublishService;
 import com.yupi.project.service.QWeatherService;
 import com.yupi.project.service.SysConfigService;
+import com.yupi.project.service.SysOperationLogService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
@@ -37,6 +39,19 @@ public class SysConfigController {
 
     @Resource
     private QWeatherService qWeatherService;
+
+    @Resource
+    private PlanPublishService planPublishService;
+
+    @Resource
+    private SysOperationLogService operationLogService;
+
+    /**
+     * 方案类型：1 人工 / 2 AI / 3 临时
+     */
+    private static final int PLAN_TYPE_MANUAL = 1;
+    private static final int PLAN_TYPE_AI = 2;
+    private static final int PLAN_TYPE_TEMP = 3;
 
     /**
      * 城市名查询：将前端输入的城市名解析为和风城市ID候选列表。
@@ -95,6 +110,8 @@ public class SysConfigController {
 
     /**
      * 更新系统配置
+     * 保存后自动下发当前方案（AI 生成由前端在各方案页面显式触发，此处仅下发）。
+     * 临时模式不下发（保持临时方案执行中）。
      *
      * @param sysConfigUpdateRequest
      * @return
@@ -113,7 +130,31 @@ public class SysConfigController {
         sysConfig.setId(FIXED_ID);
         sysConfigService.validSysConfig(sysConfig, false);
         boolean result = sysConfigService.updateById(sysConfig);
+
+        // 保存成功后自动下发对应方案（临时模式除外）
+        Integer planType = sysConfig.getCurrentPlanType();
+        if (planType != null && planType != PLAN_TYPE_TEMP) {
+            try {
+                planPublishService.publishCurrentPlan();
+                operationLogService.log("publish", "保存配置触发自动下发方案，类型：" + planTypeName(planType));
+            } catch (Exception e) {
+                log.warn("保存配置后自动下发方案失败 planType={}", planType, e);
+            }
+        }
         return ResultUtils.success(result);
+    }
+
+    private String planTypeName(int type) {
+        switch (type) {
+            case PLAN_TYPE_MANUAL:
+                return "人工方案";
+            case PLAN_TYPE_AI:
+                return "AI方案";
+            case PLAN_TYPE_TEMP:
+                return "临时方案";
+            default:
+                return String.valueOf(type);
+        }
     }
 }
 

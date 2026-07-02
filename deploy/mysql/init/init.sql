@@ -1,9 +1,3 @@
--- 创建库
-create database if not exists my_db;
-
--- 切换库
-use my_db;
-
 -- 用户表
 create table if not exists user
 (
@@ -52,6 +46,7 @@ create table if not exists sys_config
     location_code          varchar(32)                           not null comment '和风城市ID（存数据库用）',
     location_name          varchar(64)                           null comment '城市名称（前端展示用）',
     special_note           varchar(200)                          null comment '生长阶段备注：种子/幼苗期等',
+    plant_type             tinyint                               null comment '种植方式：1花盆盆栽(20-25cm) 2大盆(30cm以上) 3地栽单株',
     mail_addr              varchar(128)                          null comment '预警接收邮箱',
     scene_type             tinyint                               not null comment '1室外 2室内',
     enable_warn            tinyint     default 0                 not null comment '0关闭预警 1开启预警邮件',
@@ -60,6 +55,10 @@ create table if not exists sys_config
     update_time            datetime    default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间'
 ) comment '系统全局配置';
 
+-- 初始化系统配置（必须有一条默认记录）
+INSERT INTO sys_config (id, plant_name, location_code, location_name, scene_type, current_plan_type)
+VALUES (1, '绿萝', '101010100', '北京', 2, 1);
+
 -- 人工基准方案主表（固定单条，id=1）
 create table if not exists irr_manual_plan
 (
@@ -67,6 +66,9 @@ create table if not exists irr_manual_plan
     remark      varchar(200)                          null comment '方案文字备注',
     update_time datetime    default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间'
 ) comment '人工基准方案主表';
+
+-- 初始化人工方案
+INSERT INTO irr_manual_plan (id, remark) VALUES (1, '人工基准浇水方案');
 
 -- AI常态基准方案主表（固定单条，id=1）
 create table if not exists irr_ai_plan
@@ -102,11 +104,15 @@ create table if not exists irr_plan_item
     parent_id      bigint                                not null comment '关联对应方案的主键ID',
     parent_type    tinyint                               not null comment '方案类型 1人工/2AI常态/3极端临时',
     water_time     time                                  not null comment '每日浇水时刻 HH:mm:00',
-    water_duration int                                   not null comment '单次浇水分钟，代表浇水量',
+    water_duration int                                   not null comment '单次浇水毫升数',
     sort           int         default 0                 null comment '前端展示排序',
     enable         tinyint     default 1                 null comment '该时段是否启用',
     index idx_parent_rel (parent_id, parent_type)
 ) comment '存储所有方案的多组浇水时间、水量';
+
+-- 初始化人工方案默认时段（早上8点和下午6点）
+INSERT INTO irr_plan_item (parent_id, parent_type, water_time, water_duration, sort, enable)
+VALUES (1, 1, '08:00:00', 100, 1, 1), (1, 1, '18:00:00', 150, 2, 1);
 
 -- 历史预警记录表
 create table if not exists warn_history
@@ -125,17 +131,6 @@ create table if not exists warn_history
     index idx_time (record_time),
     index idx_valid (is_valid)
 ) comment '历史预警记录表';
-
--- ===== 升级语句（已有数据库执行）=====
--- sys_config 增加 location_name 列（城市名称，前端展示用）
-ALTER TABLE sys_config ADD COLUMN location_name VARCHAR(64) NULL COMMENT '城市名称（前端展示用）' AFTER location_code;
-
--- sys_config 增加 plant_type 列（种植方式：1花盆盆栽 2大盆 3地栽单株）
-ALTER TABLE sys_config ADD COLUMN plant_type TINYINT NULL COMMENT '种植方式：1花盆盆栽(20-25cm) 2大盆(30cm以上) 3地栽单株' AFTER special_note;
-
--- warn_history 增加 is_valid 列（是否有效：1有效 0已作废）
-ALTER TABLE warn_history ADD COLUMN is_valid TINYINT DEFAULT 1 NOT NULL COMMENT '是否有效：1有效 0已作废' AFTER msg_type;
-ALTER TABLE warn_history ADD INDEX idx_valid (is_valid);
 
 -- 操作日志表
 create table if not exists sys_operation_log

@@ -45,6 +45,11 @@ public class SysConfig implements Serializable {
     private String specialNote;
 
     /**
+     * 种植方式：1花盆盆栽(20-25cm) 2大盆(30cm以上) 3地栽单株
+     */
+    private Integer plantType;
+
+    /**
      * 预警接收邮箱
      */
     private String mailAddr;

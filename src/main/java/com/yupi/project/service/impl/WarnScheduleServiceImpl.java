@@ -1,7 +1,9 @@
 package com.yupi.project.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.yupi.project.common.ErrorCode;
+import com.yupi.project.common.MqttPublishUtil;
 import com.yupi.project.exception.BusinessException;
 import com.yupi.project.model.dto.warn.WarnSimulateRequest;
 import com.yupi.project.model.entity.IrrTempPlan;
@@ -24,9 +26,11 @@ import org.springframework.stereotype.Service;
 import javax.annotation.Resource;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.stream.Collectors;
@@ -70,6 +74,9 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
     private PlanPublishService planPublishService;
 
     @Resource
+    private MqttPublishUtil mqttPublishUtil;
+
+    @Resource
     private SysOperationLogService operationLogService;
 
     /**
@@ -94,7 +101,7 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
                     .filter(id -> id != null && !id.isEmpty())
                     .collect(Collectors.toSet());
 
-            // 1. 记录新预警 + 邮件通知
+            // 1. 收集新预警（尚未记录的）
             List<QWeatherWarning> newAlerts = new ArrayList<>();
             for (QWeatherWarning w : warnings) {
                 if (w.getWarnId() == null || w.getWarnId().isEmpty()) {
@@ -103,21 +110,25 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
                 long cnt = warnHistoryService.count(new QueryWrapper<WarnHistory>()
                         .eq("warn_id", w.getWarnId()).eq("msg_type", MSG_ALERT));
                 if (cnt == 0) {
-                    recordAlert(w, to);
                     newAlerts.add(w);
                 }
+            }
+            // 批量记录新预警（同批次都标记有效，只作废上一批）
+            recordAlerts(newAlerts, to);
+            // 只要检测到新预警就发送 w 通知设备（不受自动介入开关限制）
+            if (!newAlerts.isEmpty()) {
+                sendWarnMqtt("w");
             }
 
             // 2. 记录已解除的预警（cancel）
             recordCanceledWarnings(currentWarnIds, to);
 
-            // 3. 自动介入：开启介入 + 有新预警 + 当前未处于临时模式
-            boolean alreadyInTemp = config.getCurrentPlanType() != null
-                    && config.getCurrentPlanType() == PLAN_TYPE_TEMP
-                    && getActiveTempPlan() != null;
+            // 3. 自动介入：开启介入 + 有新预警
+            //    若已有生效临时方案，先作废旧方案再生成新的（AI 直接替换下发，人工生成新的供确认）
             if (config.getEnableAutoIntervene() != null && config.getEnableAutoIntervene() == 1
-                    && !newAlerts.isEmpty() && !alreadyInTemp) {
-                handleIntervene(config, newAlerts.get(0), to);
+                    && !newAlerts.isEmpty()) {
+                dismissActiveTempPlan(config);
+                handleIntervene(config, newAlerts, to);
             }
 
             // 4. 自动恢复：当前无预警且处于临时模式且有生效临时方案
@@ -186,17 +197,17 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
 
         String to = config.getMailAddr();
         // 记录预警 + 邮件
-        recordAlert(w, to);
+        recordAlerts(Collections.singletonList(w), to);
+        // 只要检测到预警就发送 w 通知设备
+        sendWarnMqtt("w");
         // 记录操作日志
         operationLogService.log("simulate_warn",
                 "手动触发模拟预警：" + request.getWarnType() + " · " + request.getWarnLevel()
                         + " · 持续" + minutes + "分钟" + manualDesc);
-        // 自动介入：开启介入且当前非临时模式
-        boolean alreadyInTemp = config.getCurrentPlanType() != null
-                && config.getCurrentPlanType() == PLAN_TYPE_TEMP
-                && getActiveTempPlan() != null;
-        if (config.getEnableAutoIntervene() != null && config.getEnableAutoIntervene() == 1 && !alreadyInTemp) {
-            handleIntervene(config, w, to);
+        // 自动介入：开启介入即触发，若已有临时方案先作废再生成新的
+        if (config.getEnableAutoIntervene() != null && config.getEnableAutoIntervene() == 1) {
+            dismissActiveTempPlan(config);
+            handleIntervene(config, Collections.singletonList(w), to);
         }
         log.info("测试面板模拟预警完成 warnId={} type={}", w.getWarnId(), w.getWarnType());
     }
@@ -229,7 +240,9 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
         if (activeTemp == null) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "无生效中的临时方案，无需解除");
         }
-        // 1. 记录一条 cancel 消息到预警历史
+        // 1. 作废所有有效预警 + 记录一条 cancel 消息到预警历史
+        warnHistoryService.update(new UpdateWrapper<WarnHistory>()
+                .eq("is_valid", 1).set("is_valid", 0));
         WarnHistory cancel = new WarnHistory();
         cancel.setWarnId("MANUAL-" + System.currentTimeMillis());
         cancel.setWarnType(activeTemp.getWarnType());
@@ -238,6 +251,8 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
         cancel.setAlertEnd(activeTemp.getAlertEnd());
         cancel.setDescText("手动解除预警");
         cancel.setMsgType(MSG_CANCEL);
+        cancel.setIsValid(0);
+        cancel.setRecordTime(new Date());
         warnHistoryService.save(cancel);
         // 2. 作废临时方案 + 恢复原方案 + 邮件通知
         restoreFromTemp(activeTemp, config, config.getMailAddr(), "手动解除预警");
@@ -247,28 +262,47 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
     }
 
     /**
-     * 记录一条 alert 预警并发送邮件
+     * 批量记录新预警：先作废上一批有效预警，再保存本批所有预警（同批次都标记有效）
      */
-    private void recordAlert(QWeatherWarning w, String to) {
-        WarnHistory wh = toWarnHistory(w, MSG_ALERT);
-        warnHistoryService.save(wh);
-        sendMail(to, "【极端天气预警】" + nullToEmpty(w.getWarnType()),
-                formatWarning("检测到极端天气预警", w));
+    private void recordAlerts(List<QWeatherWarning> alerts, String to) {
+        if (alerts.isEmpty()) {
+            return;
+        }
+        // 作废所有现存有效预警（is_valid=1 -> 0）
+        warnHistoryService.update(new UpdateWrapper<WarnHistory>()
+                .eq("is_valid", 1).set("is_valid", 0));
+        for (QWeatherWarning w : alerts) {
+            WarnHistory wh = toWarnHistory(w, MSG_ALERT);
+            wh.setIsValid(1);
+            warnHistoryService.save(wh);
+            sendMail(to, "【极端天气预警】" + nullToEmpty(w.getWarnType()),
+                    formatWarning("检测到极端天气预警", w));
+        }
     }
 
     /**
-     * 介入处理：生成临时方案，AI 模式自动切换下发，人工模式邮件提示手动确认
+     * 介入处理：合并多条预警信息生成临时方案，AI 模式自动切换下发，人工模式邮件提示手动确认
      */
-    private void handleIntervene(SysConfig config, QWeatherWarning w, String to) {
+    private void handleIntervene(SysConfig config, List<QWeatherWarning> alerts, String to) {
         IrrTempPlan temp = new IrrTempPlan();
         // 记录原方案类型，便于结束后恢复
         temp.setSourceType(config.getCurrentPlanType() == null ? PLAN_TYPE_MANUAL : config.getCurrentPlanType());
-        temp.setWarnType(w.getWarnType());
-        temp.setWarnLevel(w.getWarnLevel());
-        temp.setAlertStart(w.getAlertStart());
-        temp.setAlertEnd(w.getAlertEnd());
-        temp.setDescText(w.getDescText());
+        // 合并多条预警信息：类型/等级用顿号连接，时间取最早开始最晚结束，详情拼接
+        temp.setWarnType(alerts.stream()
+                .map(w -> nullToEmpty(w.getWarnType())).filter(s -> !s.isEmpty())
+                .collect(Collectors.joining("、")));
+        temp.setWarnLevel(alerts.stream()
+                .map(w -> nullToEmpty(w.getWarnLevel())).filter(s -> !s.isEmpty())
+                .collect(Collectors.joining("、")));
+        temp.setAlertStart(alerts.stream().map(QWeatherWarning::getAlertStart)
+                .filter(Objects::nonNull).min(Date::compareTo).orElse(null));
+        temp.setAlertEnd(alerts.stream().map(QWeatherWarning::getAlertEnd)
+                .filter(Objects::nonNull).max(Date::compareTo).orElse(null));
+        temp.setDescText(alerts.stream()
+                .map(w -> nullToEmpty(w.getDescText())).filter(s -> !s.isEmpty())
+                .collect(Collectors.joining("\n")));
         temp.setStatus(1);
+        String warnSummary = formatWarnings(alerts);
         try {
             Long tempId = aiPlanService.generateTempPlan(temp);
             if (config.getCurrentPlanType() != null && config.getCurrentPlanType() == PLAN_TYPE_AI) {
@@ -276,20 +310,56 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
                 updatePlanType(config.getId(), PLAN_TYPE_TEMP);
                 planPublishService.publishCurrentPlan();
                 sendMail(to, "已自动切换临时方案并下发",
-                        formatWarning("检测到极端天气，已自动生成临时方案并切换下发。", w)
+                        "检测到极端天气，已自动生成临时方案并切换下发。\n" + warnSummary
                                 + "\n临时方案ID：" + tempId);
             } else if (config.getCurrentPlanType() != null && config.getCurrentPlanType() == PLAN_TYPE_MANUAL) {
                 // 人工模式：邮件提示，等待手动确认
                 sendMail(to, "已生成临时方案，请确认是否下发",
-                        formatWarning("检测到极端天气，已生成临时方案。请人工确认是否切换下发。", w)
+                        "检测到极端天气，已生成临时方案。请人工确认是否切换下发。\n" + warnSummary
                                 + "\n临时方案ID：" + tempId
                                 + "\n确认接口：POST /api/irrPlan/activateTemp?tempPlanId=" + tempId);
             }
         } catch (Exception e) {
             log.error("生成临时方案失败", e);
             sendMail(to, "临时方案生成失败",
-                    formatWarning("自动介入生成临时方案失败：", w) + "\n错误：" + e.getMessage());
+                    "自动介入生成临时方案失败：\n" + warnSummary + "\n错误：" + e.getMessage());
         }
+    }
+
+    /**
+     * 作废当前生效的临时方案，切回原方案类型。
+     * 用于收到新预警时替换旧临时方案——AI 模式无需中间下发（紧接着 handleIntervene 会下发新临时方案），
+     * 人工模式需下发原方案让设备回到人工基准等待确认。
+     *
+     * @param config 当前配置（内存中 currentPlanType 会被更新为原方案类型）
+     * @return true 如果存在并作废了旧临时方案
+     */
+    private boolean dismissActiveTempPlan(SysConfig config) {
+        IrrTempPlan existingTemp = getActiveTempPlan();
+        if (existingTemp == null) {
+            return false;
+        }
+        // 作废旧临时方案
+        IrrTempPlan upd = new IrrTempPlan();
+        upd.setId(existingTemp.getId());
+        upd.setStatus(2);
+        irrTempPlanService.updateById(upd);
+        // 如果当前处于临时模式，切回原方案类型
+        if (config.getCurrentPlanType() != null && config.getCurrentPlanType() == PLAN_TYPE_TEMP) {
+            Integer sourceType = existingTemp.getSourceType() == null ? PLAN_TYPE_MANUAL : existingTemp.getSourceType();
+            updatePlanType(config.getId(), sourceType);
+            config.setCurrentPlanType(sourceType);
+            // 人工模式需下发原方案让设备回到人工基准；AI 模式跳过（紧接着会生成新临时方案并下发）
+            if (sourceType == PLAN_TYPE_MANUAL) {
+                try {
+                    planPublishService.publishCurrentPlan();
+                } catch (Exception e) {
+                    log.warn("替换旧临时方案时下发人工方案失败", e);
+                }
+            }
+        }
+        log.info("旧临时方案已作废 tempId={}", existingTemp.getId());
+        return true;
     }
 
     /**
@@ -311,6 +381,7 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
             // 重新下发原方案
             try {
                 planPublishService.publishCurrentPlan();
+                sendWarnMqtt("s");
             } catch (Exception e) {
                 log.warn("恢复后重新下发原方案失败", e);
             }
@@ -331,7 +402,7 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
      */
     private void recordCanceledWarnings(Set<String> currentWarnIds, String to) {
         Set<String> alertedIds = warnHistoryService.list(new QueryWrapper<WarnHistory>()
-                        .select("DISTINCT warn_id").eq("msg_type", MSG_ALERT))
+                        .select("DISTINCT warn_id").eq("msg_type", MSG_ALERT).eq("is_valid", 1))
                 .stream().map(WarnHistory::getWarnId).filter(id -> id != null).collect(Collectors.toSet());
         Set<String> canceledIds = warnHistoryService.list(new QueryWrapper<WarnHistory>()
                         .select("DISTINCT warn_id").eq("msg_type", MSG_CANCEL))
@@ -343,6 +414,9 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
                 // 取原 alert 记录复制字段
                 WarnHistory origin = warnHistoryService.getOne(new QueryWrapper<WarnHistory>()
                         .eq("warn_id", id).eq("msg_type", MSG_ALERT).orderByDesc("record_time").last("limit 1"), false);
+                // 作废原 alert 记录
+                warnHistoryService.update(new UpdateWrapper<WarnHistory>()
+                        .eq("warn_id", id).eq("msg_type", MSG_ALERT).eq("is_valid", 1).set("is_valid", 0));
                 WarnHistory cancel = new WarnHistory();
                 if (origin != null) {
                     cancel.setWarnType(origin.getWarnType());
@@ -353,6 +427,8 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
                 }
                 cancel.setWarnId(id);
                 cancel.setMsgType(MSG_CANCEL);
+                cancel.setIsValid(0);
+                cancel.setRecordTime(new Date());
                 warnHistoryService.save(cancel);
                 sendMail(to, "【极端天气解除】" + (origin == null ? "" : nullToEmpty(origin.getWarnType())),
                         "预警已解除。\n预警类型：" + (origin == null ? "" : nullToEmpty(origin.getWarnType()))
@@ -373,6 +449,17 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
                 .eq("status", 1).orderByDesc("create_time").last("limit 1"), false);
     }
 
+    /**
+     * 发送预警状态 MQTT 通知：w=进入预警模式，s=解除预警恢复安全
+     */
+    private void sendWarnMqtt(String msg) {
+        try {
+            mqttPublishUtil.sendMsg(msg, 0, false);
+        } catch (Exception e) {
+            log.warn("发送MQTT通知失败 msg={}", msg, e);
+        }
+    }
+
     private WarnHistory toWarnHistory(QWeatherWarning w, String msgType) {
         WarnHistory wh = new WarnHistory();
         wh.setWarnId(w.getWarnId());
@@ -382,6 +469,7 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
         wh.setAlertEnd(w.getAlertEnd());
         wh.setDescText(w.getDescText());
         wh.setMsgType(msgType);
+        wh.setRecordTime(new Date());
         return wh;
     }
 
@@ -396,6 +484,17 @@ public class WarnScheduleServiceImpl implements WarnScheduleService {
         sb.append("结束时间：").append(w.getAlertEnd() == null ? "" : sdf.format(w.getAlertEnd())).append("\n");
         sb.append("预警详情：").append(nullToEmpty(w.getDescText()));
         return sb.toString();
+    }
+
+    /**
+     * 格式化多条预警信息（用于邮件内容）
+     */
+    private String formatWarnings(List<QWeatherWarning> alerts) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < alerts.size(); i++) {
+            sb.append(formatWarning("预警" + (i + 1), alerts.get(i))).append("\n");
+        }
+        return sb.toString().trim();
     }
 
     private void sendMail(String to, String subject, String content) {

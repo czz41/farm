@@ -1,6 +1,7 @@
 package com.yupi.project.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yupi.project.common.BaseResponse;
 import com.yupi.project.common.DeleteRequest;
@@ -11,6 +12,7 @@ import com.yupi.project.exception.BusinessException;
 import com.yupi.project.model.dto.warnhistory.WarnHistoryAddRequest;
 import com.yupi.project.model.dto.warnhistory.WarnHistoryQueryRequest;
 import com.yupi.project.model.entity.WarnHistory;
+import com.yupi.project.service.SysOperationLogService;
 import com.yupi.project.service.WarnHistoryService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -32,6 +34,9 @@ public class WarnHistoryController {
 
     @Resource
     private WarnHistoryService warnHistoryService;
+
+    @Resource
+    private SysOperationLogService operationLogService;
 
     // region 增删查
 
@@ -130,10 +135,40 @@ public class WarnHistoryController {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
         QueryWrapper<WarnHistory> queryWrapper = new QueryWrapper<>(warnHistoryQuery);
-        queryWrapper.orderBy(StringUtils.isNotBlank(sortField),
-                sortOrder.equals(CommonConstant.SORT_ORDER_ASC), sortField);
+        // 默认按记录时间倒序（最新预警排在最上方），若前端指定排序字段则覆盖
+        if (StringUtils.isNotBlank(sortField)) {
+            queryWrapper.orderBy(true, sortOrder.equals(CommonConstant.SORT_ORDER_ASC), sortField);
+        } else {
+            queryWrapper.orderByDesc("record_time", "id");
+        }
         Page<WarnHistory> page = warnHistoryService.page(new Page<>(current, size), queryWrapper);
         return ResultUtils.success(page);
+    }
+
+    /**
+     * 手动作废一条预警（标记 is_valid=0）
+     *
+     * @param deleteRequest
+     * @return
+     */
+    @PostMapping("/dismiss")
+    public BaseResponse<Boolean> dismissWarnHistory(@RequestBody DeleteRequest deleteRequest) {
+        if (deleteRequest == null || deleteRequest.getId() <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        long id = deleteRequest.getId();
+        WarnHistory oldHistory = warnHistoryService.getById(id);
+        if (oldHistory == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
+        }
+        if (oldHistory.getIsValid() != null && oldHistory.getIsValid() == 0) {
+            return ResultUtils.success(true);
+        }
+        boolean updated = warnHistoryService.update(new UpdateWrapper<WarnHistory>()
+                .eq("id", id).set("is_valid", 0));
+        operationLogService.log("dismiss_warn", "手动作废预警记录ID：" + id
+                + "，类型：" + oldHistory.getWarnType() + "，等级：" + oldHistory.getWarnLevel());
+        return ResultUtils.success(updated);
     }
 
     // endregion

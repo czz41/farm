@@ -34,5 +34,10 @@ public class WarnHistoryQueryRequest extends PageRequest implements Serializable
      */
     private String msgType;
 
+    /**
+     * 是否有效：1有效 0已作废
+     */
+    private Integer isValid;
+
     private static final long serialVersionUID = 1L;
 }

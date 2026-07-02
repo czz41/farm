@@ -62,6 +62,11 @@ public class WarnHistory implements Serializable {
     private String msgType;
 
     /**
+     * 是否有效：1有效 0已作废
+     */
+    private Integer isValid;
+
+    /**
      * 记录时间
      */
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")

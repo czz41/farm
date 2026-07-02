@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Sparkles, Send, Droplets, Info, Loader2, RefreshCw, Leaf } from "lucide-react";
+import { Sparkles, Droplets, Info, Loader2, RefreshCw, Leaf } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import PlanItemCard from "@/components/PlanItemCard";
 import Skeleton from "@/components/Skeleton";
 import { useStore } from "@/store";
 import { updateConfig } from "@/api/config";
-import { getAiPlan, generateAiPlan, publishPlan, listPlanItems } from "@/api/plan";
+import { getAiPlan, generateAiPlan, listPlanItems } from "@/api/plan";
 import type { PlanItem, IrrAiPlan } from "@/types";
 import { sortItemsByTime } from "@/utils/format";
 
@@ -17,7 +17,6 @@ export default function AiPlan() {
   const [planId, setPlanId] = useState<number>(1);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [publishing, setPublishing] = useState(false);
 
   const load = async () => {
     try {
@@ -53,25 +52,18 @@ export default function AiPlan() {
       // 重新拉取时段
       const planItems = await listPlanItems(pid, 2);
       setItems(planItems ?? []);
-      pushToast("success", "AI方案已生成");
+      pushToast("success", "AI方案已生成并下发");
+      // 生成后自动下发AI方案
+      try {
+        await updateConfig({ currentPlanType: 2 });
+        await loadConfig();
+      } catch {
+        pushToast("info", "已生成，下发失败请稍后手动下发");
+      }
     } catch (e) {
       pushToast("error", (e as Error).message || "生成失败");
     } finally {
       setGenerating(false);
-    }
-  };
-
-  const handlePublish = async () => {
-    setPublishing(true);
-    try {
-      await updateConfig({ currentPlanType: 2 });
-      await publishPlan();
-      await loadConfig();
-      pushToast("success", "AI方案已下发至设备");
-    } catch (e) {
-      pushToast("error", (e as Error).message || "下发失败");
-    } finally {
-      setPublishing(false);
     }
   };
 
@@ -85,23 +77,14 @@ export default function AiPlan() {
         subtitle="DeepSeek 生成适配基准方案 · 多时段智能浇水计划"
         icon={<Sparkles size={22} />}
         actions={
-          <div className="flex gap-3">
-            <button
-              onClick={handleGenerate}
-              disabled={generating}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 transition-colors text-sm font-body disabled:opacity-50"
-            >
-              {generating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              {generating ? "生成中…" : (items.length ? "重新生成" : "生成方案")}
-            </button>
-            <button
-              onClick={handlePublish}
-              disabled={publishing || items.length === 0}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-blue-400 text-white font-body font-medium text-sm shadow-blue-500/25 hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
-              <Send size={16} /> {publishing ? "下发中…" : "下发方案"}
-            </button>
-          </div>
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 transition-colors text-sm font-body disabled:opacity-50"
+          >
+            {generating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            {generating ? "生成中…" : (items.length ? "重新生成" : "生成方案")}
+          </button>
         }
       />
 
@@ -143,7 +126,7 @@ export default function AiPlan() {
           <p className="text-creamDim text-xs mb-4">点击右上角「生成方案」让 DeepSeek 为你定制浇水计划</p>
           {config && (
             <div className="flex items-center gap-2 text-creamDim text-xs">
-              <Leaf size={12} /> {config.plantName || "未填写植物"} · {config.locationCode || "未填写地域"}
+              <Leaf size={12} /> {config.plantName || "未填写植物"} · {config.locationName || "未填写地域"}
             </div>
           )}
         </div>

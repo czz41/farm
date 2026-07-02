@@ -17,7 +17,8 @@ import Switch from "@/components/Switch";
 import Skeleton from "@/components/Skeleton";
 import { useStore } from "@/store";
 import { updateConfig, cityLookup } from "@/api/config";
-import { PLAN_TYPE, SCENE, type SysConfig, type CityLookupVO } from "@/types";
+import { generateAiPlan, publishPlan } from "@/api/plan";
+import { PLAN_TYPE, PLANT_TYPE, SCENE, type SysConfig, type CityLookupVO } from "@/types";
 import { cn } from "@/lib/utils";
 
 export default function Config() {
@@ -43,6 +44,8 @@ export default function Config() {
   // 城市联想
   const searchCity = useCallback(async (q: string) => {
     setCityQuery(q);
+    // 同步到 form.locationName，确保保存时城市名不会丢失
+    setForm((f) => ({ ...f, locationName: q }));
     if (q.trim().length < 1) {
       setCityResults([]);
       return;
@@ -98,6 +101,15 @@ export default function Config() {
       // 保存成功后允许下次同步最新 config
       syncedRef.current = false;
       await loadConfig();
+      // AI 模式：配置变更后重新生成 AI 方案并下发，确保方案与最新配置匹配
+      if (form.currentPlanType === PLAN_TYPE.AI) {
+        try {
+          await generateAiPlan();
+          await publishPlan();
+        } catch {
+          // 生成/下发失败不阻塞配置保存流程
+        }
+      }
       pushToast("success", "配置已保存");
     } catch (e) {
       pushToast("error", (e as Error).message || "保存失败");
@@ -160,6 +172,46 @@ export default function Config() {
                 className="input-field resize-none"
               />
             </Field>
+            <Field label="种植方式">
+              <div className="grid grid-cols-3 gap-3">
+                <button
+                  onClick={() => set("plantType", PLANT_TYPE.POT_SMALL)}
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-1 py-3 rounded-xl border transition-all",
+                    form.plantType === PLANT_TYPE.POT_SMALL
+                      ? "bg-leaf/15 border-leaf/40 text-leaf"
+                      : "border-cream/10 text-creamDim hover:border-cream/20"
+                  )}
+                >
+                  <span className="text-sm">花盆盆栽</span>
+                  <span className="text-xs opacity-70">20-25cm</span>
+                </button>
+                <button
+                  onClick={() => set("plantType", PLANT_TYPE.POT_LARGE)}
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-1 py-3 rounded-xl border transition-all",
+                    form.plantType === PLANT_TYPE.POT_LARGE
+                      ? "bg-leaf/15 border-leaf/40 text-leaf"
+                      : "border-cream/10 text-creamDim hover:border-cream/20"
+                  )}
+                >
+                  <span className="text-sm">大盆</span>
+                  <span className="text-xs opacity-70">30cm以上</span>
+                </button>
+                <button
+                  onClick={() => set("plantType", PLANT_TYPE.GROUND)}
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-1 py-3 rounded-xl border transition-all",
+                    form.plantType === PLANT_TYPE.GROUND
+                      ? "bg-leaf/15 border-leaf/40 text-leaf"
+                      : "border-cream/10 text-creamDim hover:border-cream/20"
+                  )}
+                >
+                  <span className="text-sm">地栽单株</span>
+                  <span className="text-xs opacity-70">菜园</span>
+                </button>
+              </div>
+            </Field>
           </div>
         </motion.div>
 
@@ -173,7 +225,7 @@ export default function Config() {
             <Field label="所在城市">
               <div className="relative">
                 <input
-                  value={cityQuery || form.locationCode || ""}
+                  value={cityQuery || form.locationName || ""}
                   onChange={(e) => searchCity(e.target.value)}
                   onBlur={() => setTimeout(() => setShowCityDropdown(false), 200)}
                   onFocus={() => { if (cityResults.length > 0) setShowCityDropdown(true); }}
@@ -186,7 +238,8 @@ export default function Config() {
                       <button
                         key={c.id}
                         onClick={() => {
-                          set("locationCode", c.name);
+                          set("locationCode", c.id);
+                          set("locationName", c.name);
                           setCityQuery(c.name);
                           setShowCityDropdown(false);
                         }}

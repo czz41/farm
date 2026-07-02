@@ -5,6 +5,7 @@ export interface SysConfig {
   locationCode?: string;
   locationName?: string;
   specialNote?: string;
+  plantType?: number; // 1=花盆盆栽 2=大盆 3=地栽单株
   sceneType?: number; // 1=室外 2=室内
   enableWarn?: number; // 0=关 1=开
   enableAutoIntervene?: number; // 0=关 1=开
@@ -77,6 +78,7 @@ export interface WarnHistory {
   alertEnd?: string;
   descText?: string;
   recordTime?: string;
+  isValid?: number; // 1有效 0已作废
 }
 
 // 分页响应
@@ -121,6 +123,13 @@ export const SCENE = {
   INDOOR: 2,
 } as const;
 
+// 种植方式常量
+export const PLANT_TYPE = {
+  POT_SMALL: 1, // 花盆盆栽 20-25cm
+  POT_LARGE: 2, // 大盆 30cm以上
+  GROUND: 3, // 地栽单株
+} as const;
+
 // 方案类型名称
 export const PLAN_TYPE_NAME: Record<number, string> = {
   1: "人工方案",
@@ -132,4 +141,11 @@ export const PLAN_TYPE_NAME: Record<number, string> = {
 export const SCENE_NAME: Record<number, string> = {
   1: "室外",
   2: "室内",
+};
+
+// 种植方式名称
+export const PLANT_TYPE_NAME: Record<number, string> = {
+  1: "花盆盆栽",
+  2: "大盆",
+  3: "地栽单株",
 };

@@ -1,8 +1,6 @@
 package com.yupi.project.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.yupi.project.common.ErrorCode;
 import com.yupi.project.common.MqttPublishUtil;
 import com.yupi.project.exception.BusinessException;
@@ -136,6 +134,13 @@ public class PlanPublishServiceImpl implements PlanPublishService {
 
     /**
      * 查询指定方案的启用浇水时段，组装 payload 并通过 MQTT 下发
+     * 消息格式为纯文本：
+     * <pre>
+     * t
+     * 8:00 50
+     * 18:00 100
+     * </pre>
+     * 第一行为 "t"，后续每行为 "HH:mm 毫升数"
      *
      * @return 是否下发成功
      */
@@ -150,30 +155,23 @@ public class PlanPublishServiceImpl implements PlanPublishService {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "当前方案无启用的浇水时段，无法下发");
         }
 
-        JsonObject payload = new JsonObject();
-        payload.addProperty("planType", planType);
-        payload.addProperty("planName", planName);
-        payload.addProperty("publishTime", System.currentTimeMillis());
-        JsonArray arr = new JsonArray();
-        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
-        for (int i = 0; i < items.size(); i++) {
-            IrrPlanItem item = items.get(i);
-            JsonObject o = new JsonObject();
-            o.addProperty("waterTime", item.getWaterTime() == null ? "" : sdf.format(item.getWaterTime()));
-            o.addProperty("waterDuration", item.getWaterDuration());
-            o.addProperty("sort", item.getSort() == null ? i + 1 : item.getSort());
-            arr.add(o);
+        // 组装纯文本消息：首行 "t"，后续每行 "HH:mm 毫升数"
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm");
+        StringBuilder msgBuilder = new StringBuilder("t");
+        for (IrrPlanItem item : items) {
+            String timeStr = item.getWaterTime() == null ? "00:00" : sdf.format(item.getWaterTime());
+            int duration = item.getWaterDuration() == null ? 0 : item.getWaterDuration();
+            msgBuilder.append("\n").append(timeStr).append(" ").append(duration);
         }
-        payload.add("items", arr);
+        String msg = msgBuilder.toString();
 
-        String msg = payload.toString();
         try {
             mqttPublishUtil.sendMsg(msg, 0, false);
         } catch (Exception e) {
             log.error("MQTT下发失败", e);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "MQTT下发失败: " + e.getMessage());
         }
-        log.info("方案下发成功 planType={} planName={} 时段数={}", planType, planName, items.size());
+        log.info("方案下发成功 planType={} planName={} 时段数={} payload={}", planType, planName, items.size(), msg);
         operationLogService.log("publish", "下发方案：" + planName + "，时段数：" + items.size());
         return true;
     }

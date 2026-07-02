@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, ChevronLeft, ChevronRight, Eye, Bell, BellOff, ShieldOff } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Eye, ShieldOff, Ban } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import Skeleton from "@/components/Skeleton";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { listWarnHistoryPage, manualCancel } from "@/api/warn";
+import { listWarnHistoryPage, manualCancel, dismissWarn } from "@/api/warn";
 import { useStore } from "@/store";
 import type { WarnHistory } from "@/types";
 import { formatTimestamp, warnLevelBg } from "@/utils/format";
@@ -21,6 +21,8 @@ export default function WarnHistory() {
   const [detail, setDetail] = useState<WarnHistory | null>(null);
   const [cancelId, setCancelId] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [dismissId, setDismissId] = useState<number | null>(null);
+  const [dismissing, setDismissing] = useState(false);
 
   const load = async (page: number) => {
     setLoading(true);
@@ -61,6 +63,22 @@ export default function WarnHistory() {
     }
   };
 
+  // 手动作废单条预警（仅标记 is_valid=0，不影响临时方案）
+  const handleDismiss = async () => {
+    if (dismissId === null) return;
+    setDismissing(true);
+    try {
+      await dismissWarn(dismissId);
+      pushToast("success", "预警已作废");
+      await load(current);
+    } catch (e) {
+      pushToast("error", (e as Error).message || "作废失败");
+    } finally {
+      setDismissing(false);
+      setDismissId(null);
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -73,10 +91,11 @@ export default function WarnHistory() {
         {/* 表头 */}
         <div className="grid grid-cols-12 gap-2 px-6 py-3 border-b border-cream/5 text-creamDim text-xs font-body uppercase tracking-wider">
           <div className="col-span-1">等级</div>
-          <div className="col-span-2">预警类型</div>
-          <div className="col-span-1">消息</div>
-          <div className="col-span-3">开始时间</div>
-          <div className="col-span-3">结束时间</div>
+          <div className="col-span-1">预警类型</div>
+          <div className="col-span-3">预警详细描述</div>
+          <div className="col-span-2">开始时间</div>
+          <div className="col-span-2">结束时间</div>
+          <div className="col-span-1">状态</div>
           <div className="col-span-2 text-right">操作</div>
         </div>
 
@@ -91,32 +110,39 @@ export default function WarnHistory() {
         ) : (
           records.map((w, idx) => {
             const isAlert = w.msgType === "alert";
-            const canCancel = isAlert && inTempMode;
+            const isValid = w.isValid === 1;
+            const canCancel = isAlert && isValid && inTempMode;
+            const canDismiss = isAlert && isValid;
             return (
               <motion.div
                 key={w.id ?? idx}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: idx * 0.03 }}
-                className="grid grid-cols-12 gap-2 px-6 py-3.5 border-b border-cream/5 last:border-0 hover:bg-cream/[0.02] transition-colors items-center"
+                className={cn(
+                  "grid grid-cols-12 gap-2 px-6 py-3.5 border-b border-cream/5 last:border-0 hover:bg-cream/[0.02] transition-colors items-center",
+                  !isValid && "opacity-60"
+                )}
               >
                 <div className="col-span-1">
                   <span className={cn("text-[10px] px-2 py-0.5 rounded-full border font-medium", warnLevelBg(w.warnLevel))}>
                     {w.warnLevel || "未知"}
                   </span>
                 </div>
-                <div className="col-span-2 text-cream text-sm font-body truncate">{w.warnType || "—"}</div>
+                <div className="col-span-1 text-cream text-sm font-body truncate">{w.warnType || "—"}</div>
+                <div className="col-span-3 text-creamDim text-xs font-body truncate" title={w.descText || ""}>
+                  {w.descText || "—"}
+                </div>
+                <div className="col-span-2 text-creamDim text-xs font-mono truncate">{formatTimestamp(w.alertStart)}</div>
+                <div className="col-span-2 text-creamDim text-xs font-mono truncate">{formatTimestamp(w.alertEnd)}</div>
                 <div className="col-span-1">
                   <span className={cn(
-                    "flex items-center gap-1 text-xs",
-                    isAlert ? "text-amber" : "text-creamDim"
+                    "text-[10px] px-2 py-0.5 rounded-full font-medium",
+                    isValid ? "bg-emerald-500/15 text-emerald-400" : "bg-ash/20 text-creamDim"
                   )}>
-                    {isAlert ? <Bell size={12} /> : <BellOff size={12} />}
-                    {isAlert ? "预警" : "解除"}
+                    {isValid ? "有效" : "已作废"}
                   </span>
                 </div>
-                <div className="col-span-3 text-creamDim text-xs font-mono truncate">{formatTimestamp(w.alertStart)}</div>
-                <div className="col-span-3 text-creamDim text-xs font-mono truncate">{formatTimestamp(w.alertEnd)}</div>
                 <div className="col-span-2 flex items-center justify-end gap-2">
                   <button
                     onClick={() => setDetail(w)}
@@ -130,6 +156,14 @@ export default function WarnHistory() {
                       className="inline-flex items-center gap-1 text-amber hover:text-rust transition-colors text-xs"
                     >
                       <ShieldOff size={13} /> 解除
+                    </button>
+                  )}
+                  {canDismiss && (
+                    <button
+                      onClick={() => setDismissId(w.id ?? null)}
+                      className="inline-flex items-center gap-1 text-creamDim hover:text-rust transition-colors text-xs"
+                    >
+                      <Ban size={13} /> 作废
                     </button>
                   )}
                 </div>
@@ -191,6 +225,7 @@ export default function WarnHistory() {
             </div>
             <div className="space-y-3 text-sm">
               <Row label="消息类型" value={detail.msgType === "alert" ? "预警 (alert)" : "解除 (cancel)"} />
+              <Row label="是否有效" value={detail.isValid === 1 ? "有效" : "已作废"} />
               <Row label="预警ID" value={detail.warnId || "—"} mono />
               <Row label="开始时间" value={formatTimestamp(detail.alertStart)} mono />
               <Row label="结束时间" value={formatTimestamp(detail.alertEnd)} mono />
@@ -219,6 +254,15 @@ export default function WarnHistory() {
         confirmText={cancelling ? "解除中…" : "确认解除"}
         onConfirm={handleCancel}
         onCancel={() => setCancelId(null)}
+      />
+
+      <ConfirmDialog
+        open={dismissId !== null}
+        title="作废预警记录"
+        message="确认作废该预警记录吗？作废后该记录将标记为已作废，不影响当前执行的临时方案。"
+        confirmText={dismissing ? "作废中…" : "确认作废"}
+        onConfirm={handleDismiss}
+        onCancel={() => setDismissId(null)}
       />
     </div>
   );

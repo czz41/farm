@@ -1,6 +1,63 @@
 spring:
+  application:
+    name: springboot-init
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/my_db
+    url: jdbc:mysql://mysql:3306/irrigation?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
-    password: 123456
+    password: root123456
+  mvc:
+    pathmatch:
+      matching-strategy: ANT_PATH_MATCHER
+  session:
+    timeout: 86400
+    store-type: none
+  mail:
+    host: smtp.qq.com
+    port: 465
+    username: 1749127251@qq.com
+    password: ezpvmxiuffiabhba
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+          socketFactory:
+            port: 465
+            class: javax.net.ssl.SSLSocketFactory
+
+server:
+  port: 7529
+  servlet:
+    context-path: /api
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: isDelete
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+deepseek:
+  api-key: sk-74d38987675b473c930fb97739dd1f08
+  base-url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  timeout: 60000
+
+mqtt:
+  broker: tcp://8.134.210.144:1883
+  topic: farm/pi/cmd
+  status-topic: farm/pi/status
+  data-topic: farm/pi/sensor
+  online-timeout: 60000
+
+qweather:
+  api-key: 32100eec29e74b4e97b1c897b086fd31
+  base-url: https://devapi.qweather.com

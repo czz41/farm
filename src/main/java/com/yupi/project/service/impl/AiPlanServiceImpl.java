@@ -30,6 +30,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.TimeZone;
 
 /**
  * AI 浇水方案生成服务实现：调用 DeepSeek 生成方案并落库
@@ -54,10 +55,12 @@ public class AiPlanServiceImpl implements AiPlanService {
     private static final int PARENT_TYPE_TEMP = 3;
 
     private static final String SYSTEM_PROMPT =
-            "你是智能灌溉专家。根据给定的植物信息、所处位置与生长阶段备注，制定一份合理的每日浇水方案。" +
+            "你是智能灌溉专家。根据给定的植物信息、所处位置、种植方式、生长阶段备注与当前时间，制定一份合理的每日浇水方案。" +
+                    "种植方式影响浇水量：花盆盆栽(20-25cm)土壤少宜少量浇水，大盆(30cm以上)土壤较多适中浇水，地栽单株土壤容量大需充分浇水。" +
+                    "浇水时段建议在早晨 06:00-09:00 或傍晚 17:00-19:00 之间。" +
                     "只返回纯JSON，不要Markdown、不要解释文字。返回格式严格如下：\n" +
-                    "{\"remark\":\"简短的方案说明\",\"items\":[{\"waterTime\":\"HH:mm:ss\",\"waterDuration\":分钟数}]}\n" +
-                    "其中 waterTime 为 24 小时制时刻，waterDuration 为单次浇水分钟数（正整数），items 至少 1 条。";
+                    "{\"remark\":\"简短的方案说明\",\"items\":[{\"waterTime\":\"HH:mm:ss\",\"waterDuration\":毫升数}]}\n" +
+                    "其中 waterTime 为 24 小时制时刻，waterDuration 为单次浇水的毫升数(ml，正整数)，items 至少 1 条。";
 
     @Value("${deepseek.api-key:}")
     private String apiKey;
@@ -95,6 +98,7 @@ public class AiPlanServiceImpl implements AiPlanService {
         String prompt = buildPrompt(config);
         // 3. 调用 DeepSeek
         String aiContent = callDeepSeek(prompt);
+        log.info("常态方案AI返回内容：{}", aiContent);
         // 4. 解析返回
         JsonObject planJson = parsePlanJson(aiContent);
         String remark = planJson.has("remark") && !planJson.get("remark").isJsonNull()
@@ -155,6 +159,7 @@ public class AiPlanServiceImpl implements AiPlanService {
         String prompt = buildTempPrompt(config, tempPlan);
         // 3. 调用 DeepSeek
         String aiContent = callDeepSeek(prompt);
+        log.info("临时方案AI返回内容：{}", aiContent);
         // 4. 解析返回
         JsonObject planJson = parsePlanJson(aiContent);
         List<IrrPlanItem> items = parseItems(planJson);
@@ -193,11 +198,14 @@ public class AiPlanServiceImpl implements AiPlanService {
      */
     private String buildTempPrompt(SysConfig config, IrrTempPlan tempPlan) {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        sdf.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
         StringBuilder sb = new StringBuilder();
         sb.append("【基础信息】\n");
+        sb.append("当前时间：").append(sdf.format(new Date())).append("\n");
         sb.append("植物名称：").append(nullToEmpty(config.getPlantName())).append("\n");
-        sb.append("位置：").append(nullToEmpty(config.getLocationCode())).append("\n");
+        sb.append("位置：").append(nullToEmpty(config.getLocationName())).append("\n");
         sb.append("场景：").append(config.getSceneType() != null && config.getSceneType() == 1 ? "室外" : "室内").append("\n");
+        sb.append("种植方式：").append(plantTypeDesc(config.getPlantType())).append("\n");
         sb.append("生长阶段备注：").append(nullToEmpty(config.getSpecialNote())).append("\n");
         sb.append("【极端天气信息】\n");
         sb.append("预警类型：").append(nullToEmpty(tempPlan.getWarnType())).append("\n");
@@ -205,18 +213,36 @@ public class AiPlanServiceImpl implements AiPlanService {
         sb.append("开始时间：").append(tempPlan.getAlertStart() == null ? "" : sdf.format(tempPlan.getAlertStart())).append("\n");
         sb.append("结束时间：").append(tempPlan.getAlertEnd() == null ? "" : sdf.format(tempPlan.getAlertEnd())).append("\n");
         sb.append("预警详情：").append(nullToEmpty(tempPlan.getDescText())).append("\n");
-        sb.append("请结合极端天气对浇水方案做临时调整（如暴雨减少浇水、高温增加浇水频次等），生成一份临时每日浇水方案。");
+        sb.append("请综合考虑上述所有极端天气因素，对浇水方案做临时调整（如暴雨减少浇水、高温增加浇水频次等），"
+                + "若同时存在多种极端天气需综合权衡其相互影响，生成一份临时每日浇水方案。");
         return sb.toString();
+    }
+
+    /**
+     * 种植方式转中文描述
+     */
+    private String plantTypeDesc(Integer plantType) {
+        if (plantType == null) return "未指定";
+        switch (plantType) {
+            case 1: return "花盆盆栽（20-25cm）";
+            case 2: return "大盆（30cm以上）";
+            case 3: return "地栽单株";
+            default: return "未指定";
+        }
     }
 
     /**
      * 根据系统配置构建用户提示词
      */
     private String buildPrompt(SysConfig config) {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        sdf.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
         StringBuilder sb = new StringBuilder();
+        sb.append("当前时间：").append(sdf.format(new Date())).append("\n");
         sb.append("植物名称：").append(nullToEmpty(config.getPlantName())).append("\n");
-        sb.append("位置：").append(nullToEmpty(config.getLocationCode())).append("\n");
+        sb.append("位置：").append(nullToEmpty(config.getLocationName())).append("\n");
         sb.append("场景：").append(config.getSceneType() != null && config.getSceneType() == 1 ? "室外" : "室内").append("\n");
+        sb.append("种植方式：").append(plantTypeDesc(config.getPlantType())).append("\n");
         sb.append("生长阶段备注：").append(nullToEmpty(config.getSpecialNote())).append("\n");
         sb.append("请基于以上信息生成每日浇水方案。");
         return sb.toString();
@@ -265,6 +291,7 @@ public class AiPlanServiceImpl implements AiPlanService {
                 log.error("DeepSeek调用失败 code={} resp={}", code, resp);
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "DeepSeek调用失败: " + code);
             }
+            log.info("DeepSeek调用成功 code={} 响应长度={}", code, resp.length());
             JsonObject respJson = JsonParser.parseString(resp).getAsJsonObject();
             String content = respJson.getAsJsonArray("choices")
                     .get(0).getAsJsonObject()
@@ -314,6 +341,7 @@ public class AiPlanServiceImpl implements AiPlanService {
     private List<IrrPlanItem> parseItems(JsonObject planJson) {
         List<IrrPlanItem> items = new ArrayList<>();
         if (!planJson.has("items") || !planJson.get("items").isJsonArray()) {
+            log.warn("AI返回JSON中无items数组，原始内容：{}", planJson);
             return items;
         }
         JsonArray arr = planJson.getAsJsonArray("items");
@@ -323,11 +351,13 @@ public class AiPlanServiceImpl implements AiPlanService {
             String timeStr = o.has("waterTime") ? o.get("waterTime").getAsString() : null;
             Date waterTime = parseTime(timeStr);
             if (waterTime == null) {
+                log.warn("第{}条时段waterTime解析失败，原始值：{}", i + 1, timeStr);
                 continue;
             }
             item.setWaterTime(waterTime);
             int duration = o.has("waterDuration") ? o.get("waterDuration").getAsInt() : 0;
-            if (duration <= 0) {
+            if (duration < 0) {
+                log.warn("第{}条时段waterDuration为负数，已跳过，原始值：{}", i + 1, duration);
                 continue;
             }
             item.setWaterDuration(duration);

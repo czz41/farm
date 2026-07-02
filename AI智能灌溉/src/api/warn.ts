@@ -25,3 +25,8 @@ export function listWarnHistoryPage(current: number, size: number) {
 export function listWarnHistory() {
   return request.get<unknown, WarnHistory[]>("/warnHistory/list");
 }
+
+// 手动作废一条预警（标记 is_valid=0）
+export function dismissWarn(id: number) {
+  return request.post<unknown, boolean>("/warnHistory/dismiss", { id });
+}

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Hand, Plus, Send, Clock, Droplets, Info } from "lucide-react";
+import { Hand, Plus, Clock, Droplets, Info } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import PlanItemCard from "@/components/PlanItemCard";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { useStore } from "@/store";
 import { updateConfig } from "@/api/config";
-import { getManualPlan, publishPlan, addPlanItem, deletePlanItem, updatePlanItem, listPlanItems } from "@/api/plan";
+import { getManualPlan, addPlanItem, deletePlanItem, updatePlanItem, listPlanItems } from "@/api/plan";
 import type { PlanItem } from "@/types";
 import { sortItemsByTime } from "@/utils/format";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,6 @@ export default function ManualPlan() {
   const [items, setItems] = useState<PlanItem[]>([]);
   const [planId, setPlanId] = useState<number>(1);
   const [loading, setLoading] = useState(true);
-  const [publishing, setPublishing] = useState(false);
 
   // 新增/编辑表单
   const [showForm, setShowForm] = useState(false);
@@ -52,18 +51,34 @@ export default function ManualPlan() {
       pushToast("error", "请选择时间");
       return;
     }
+    const waterTime = time.length <= 5 ? `${time}:00` : time;
+    // 校验时间是否与已有时段重复（编辑时排除自身）
+    const duplicate = items.find((it) => {
+      const existTime = it.waterTime ?? "";
+      return existTime.substring(0, 5) === time && it.id !== editId;
+    });
+    if (duplicate) {
+      pushToast("error", `该时间已存在浇水时段（${duplicate.waterDuration}ml），请选择其他时间`);
+      return;
+    }
     setSaving(true);
     try {
-      const waterTime = time.length <= 5 ? `${time}:00` : time;
       if (editId !== null) {
         await updatePlanItem({ id: editId, waterTime, waterDuration, sort: items.length + 1, enable: 1 });
       } else {
         await addPlanItem({ parentId: planId, parentType: 1, waterTime, waterDuration, sort: items.length + 1, enable: 1 });
       }
-      pushToast("success", editId !== null ? "时段已更新" : "时段已添加");
+      pushToast("success", "时段已保存并下发");
       setShowForm(false);
       setEditId(null);
       await load();
+      // 保存后自动下发人工方案
+      try {
+        await updateConfig({ currentPlanType: 1 });
+        await loadConfig();
+      } catch {
+        pushToast("info", "已保存，下发失败请稍后手动下发");
+      }
     } catch (e) {
       pushToast("error", (e as Error).message || "保存失败");
     } finally {
@@ -83,26 +98,19 @@ export default function ManualPlan() {
     if (deleteId === null) return;
     try {
       await deletePlanItem(deleteId);
-      pushToast("success", "时段已删除");
+      pushToast("success", "时段已删除并下发");
       await load();
+      // 删除后自动下发人工方案
+      try {
+        await updateConfig({ currentPlanType: 1 });
+        await loadConfig();
+      } catch {
+        pushToast("info", "已删除，下发失败请稍后手动下发");
+      }
     } catch (e) {
       pushToast("error", (e as Error).message || "删除失败");
     } finally {
       setDeleteId(null);
-    }
-  };
-
-  const handlePublish = async () => {
-    setPublishing(true);
-    try {
-      await updateConfig({ currentPlanType: 1 });
-      await publishPlan();
-      await loadConfig();
-      pushToast("success", "人工方案已下发至设备");
-    } catch (e) {
-      pushToast("error", (e as Error).message || "下发失败");
-    } finally {
-      setPublishing(false);
     }
   };
 
@@ -116,21 +124,12 @@ export default function ManualPlan() {
         subtitle="用户自主掌控 · 永久人工基准 · 系统不会自动覆盖"
         icon={<Hand size={22} />}
         actions={
-          <div className="flex gap-3">
-            <button
-              onClick={() => { setEditId(null); setTime("08:00"); setWaterDuration(10); setShowForm(true); }}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 transition-colors text-sm font-body"
-            >
-              <Plus size={16} /> 新增时段
-            </button>
-            <button
-              onClick={handlePublish}
-              disabled={publishing}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-blue-400 text-white font-body font-medium text-sm shadow-blue-500/25 hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
-              <Send size={16} /> {publishing ? "下发中…" : "下发方案"}
-            </button>
-          </div>
+          <button
+            onClick={() => { setEditId(null); setTime("08:00"); setWaterDuration(10); setShowForm(true); }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 transition-colors text-sm font-body"
+          >
+            <Plus size={16} /> 新增时段
+          </button>
         }
       />
 

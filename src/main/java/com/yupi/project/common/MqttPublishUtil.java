@@ -16,7 +16,10 @@ import org.springframework.stereotype.Component;
  *
  * 【发布主题】（服务器 → 设备）
  *   farm/pi/cmd      下发浇水方案/指令
- *      payload: {"planType":1,"planName":"人工方案","publishTime":...,"items":[...]}
+ *      payload: 纯文本格式，首行 "t"，后续每行 "HH:mm 毫升数"，例如：
+ *               t
+ *               8:00 50
+ *               18:00 100
  *
  * 【订阅主题】（设备 → 服务器）
  *   farm/pi/status   设备心跳/在线状态上报
